@@ -54,6 +54,10 @@ void AirTelemetry::send_messages_fc(std::vector<MavlinkMessage>& messages) {
   // NOTE: Remember there is a hack in place for rc channels override in regards
   // to the sender sys id
   m_fc_serial->send_messages_if_enabled(generic);
+
+  if (m_tcp_server) {
+    m_tcp_server->sendMessages(messages);
+  }
 }
 
 void AirTelemetry::send_messages_ground_unit(
