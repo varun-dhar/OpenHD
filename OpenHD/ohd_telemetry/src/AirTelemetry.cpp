@@ -12,7 +12,7 @@
 #include "openhd_util.h"
 #include "openhd_util_time.h"
 
-AirTelemetry::AirTelemetry() : MavlinkSystem(OHD_SYS_ID_AIR) {
+AirTelemetry::AirTelemetry() : MavlinkSystem(OHD_SYS_ID_AIR), stop_tcp_sender(false), tcp_sender(&AirTelemetry::run_tcp_sender, this) {
   m_console = openhd::log::create_or_get("air_tele");
   assert(m_console);
   m_air_settings = std::make_unique<openhd::telemetry::air::SettingsHolder>();
@@ -43,7 +43,9 @@ AirTelemetry::AirTelemetry() : MavlinkSystem(OHD_SYS_ID_AIR) {
   m_console->debug("Created AirTelemetry");
 }
 
-AirTelemetry::~AirTelemetry() {}
+AirTelemetry::~AirTelemetry() {
+	stop_tcp_sender = true;
+}
 
 void AirTelemetry::send_messages_fc(std::vector<MavlinkMessage>& messages) {
   auto [generic, local_only] =
@@ -51,6 +53,11 @@ void AirTelemetry::send_messages_fc(std::vector<MavlinkMessage>& messages) {
   // NOTE: Remember there is a hack in place for rc channels override in regards
   // to the sender sys id
   m_fc_serial->send_messages_if_enabled(generic);
+  {
+	  std::lock_guard<std::mutex> guard(tcp_sender_mtx);
+	  tcp_sender_queue.insert(tcp_sender_queue.end(), messages.begin(), messages.end());
+  }
+  tcp_sender_cv.notify_one();
 }
 
 void AirTelemetry::send_messages_ground_unit(
@@ -68,9 +75,11 @@ void AirTelemetry::send_messages_ground_unit(
     m_wb_endpoint->sendMessages(messages);
   }
   // Not technically correct, but works
-  if (m_tcp_server) {
-    m_tcp_server->sendMessages(messages);
+  {
+	  std::lock_guard<std::mutex> guard(tcp_sender_mtx);
+	  tcp_sender_queue.insert(tcp_sender_queue.end(), messages.begin(), messages.end());
   }
+  tcp_sender_cv.notify_one();
 }
 
 void AirTelemetry::on_messages_fc(std::vector<MavlinkMessage>& messages) {
@@ -279,4 +288,15 @@ void AirTelemetry::set_link_handle(std::shared_ptr<OHDLink> link) {
   m_wb_endpoint->registerCallback([this](std::vector<MavlinkMessage> messages) {
     on_messages_ground_unit(messages);
   });
+}
+
+void AirTelemetry::run_tcp_sender(){
+	while(!stop_tcp_sender){
+		std::unique_lock<std::mutex> lock(tcp_sender_mtx);
+		tcp_sender_cv.wait(lock, [this]{return !tcp_sender_queue.empty();});
+		if(m_tcp_server){
+			m_tcp_server->sendMessages(tcp_sender_queue);
+		}
+		tcp_sender_queue.clear();
+	}
 }

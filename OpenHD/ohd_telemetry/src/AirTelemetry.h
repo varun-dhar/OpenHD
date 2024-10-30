@@ -6,6 +6,8 @@
 #define OPENHD_TELEMETRY_AIRTELEMETRY_H
 
 #include <string>
+#include <thread>
+#include <mutex>
 
 #include "endpoints/SerialEndpoint.h"
 #include "internal/OHDMainComponent.h"
@@ -81,6 +83,8 @@ class AirTelemetry : public MavlinkSystem {
   // R.N only on air, and only FC uart settings
   std::vector<openhd::Setting> get_all_settings();
   void setup_uart();
+  
+  void run_tcp_sender();
 
  private:
   std::unique_ptr<openhd::telemetry::air::SettingsHolder> m_air_settings;
@@ -98,6 +102,12 @@ class AirTelemetry : public MavlinkSystem {
   std::shared_ptr<spdlog::logger> m_console;
   // EXP - always on TCP mavlink server
   std::unique_ptr<TCPEndpoint> m_tcp_server = nullptr;
+
+  std::atomic_bool stop_tcp_sender;
+  std::mutex tcp_sender_mtx;
+  std::condition_variable tcp_sender_cv;
+  std::vector<MavlinkMessage> tcp_sender_queue;
+  std::thread tcp_sender;
 };
 
 #endif  // OPENHD_TELEMETRY_AIRTELEMETRY_H
